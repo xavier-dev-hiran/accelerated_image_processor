@@ -8,9 +8,11 @@ GpuImgProc::GpuImgProc(const rclcpp::NodeOptions & options)
     : Node("gpu_imgproc", options), rectifier_active_(false) {
     RCLCPP_INFO(this->get_logger(), "Initializing node gpu_imgproc");
 
-    // std::string image_raw_topic = this->declare_parameter<std::string>("image_raw_topic", "/camera/image_raw");
-    // std::string camera_info_topic = this->declare_parameter<std::string>("camera_info_topic", "/camera/camera_info");
-    // std::string image_rect_topic = this->declare_parameter<std::string>("image_rect_topic", "/camera/image_rect");
+    image_raw_topic = this->declare_parameter<std::string>("image_raw_topic", "/uav_camera");
+    camera_info_topic = this->declare_parameter<std::string>("camera_info_topic", "/uav_camera_info");
+    image_rect_topic = this->declare_parameter<std::string>("image_rect_topic", "/rectified/image_rect");
+    camera_info_rect_topic = this->declare_parameter<std::string>("camera_info_rect_topic", "/rectified/camera_info");
+
     std::string rect_impl = this->declare_parameter<std::string>("rect_impl", "npp");
     bool use_opencv_map_init = this->declare_parameter<bool>("use_opencv_map_init", true);
     alpha_ = this->declare_parameter<double>("alpha", 0.0);
@@ -118,15 +120,36 @@ void GpuImgProc::determineQosCallback(bool do_rectify) {
         } else {
             RCLCPP_INFO_STREAM(this->get_logger(),
                                "QoS for " << topic_name << " is acquired.");
-            qos = qos_list[0].qos_profile();
+            auto profile = qos_list[0].qos_profile().get_rmw_qos_profile();
+
+            // Sanitize QoS profile to avoid 'Unknown' policies which cause crashes
+            if (profile.reliability != RMW_QOS_POLICY_RELIABILITY_UNKNOWN) {
+                qos.reliability(profile.reliability);
+            } else {
+                qos.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+            }
+
+            if (profile.durability != RMW_QOS_POLICY_DURABILITY_UNKNOWN) {
+                qos.durability(profile.durability);
+            } else {
+                qos.durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
+            }
+
+            if (profile.history != RMW_QOS_POLICY_HISTORY_UNKNOWN) {
+                qos.history(profile.history);
+            } else {
+                qos.history(RMW_QOS_POLICY_HISTORY_KEEP_LAST);
+                qos.keep_last(1);
+            }
+
             return true;
         }
     };
 
     std::string img_sub_topic_name = this->get_node_topics_interface()->resolve_topic_name(
-        "image_raw", false);
+        image_raw_topic, false);
     std::string info_sub_topic_name = this->get_node_topics_interface()->resolve_topic_name(
-        "camera_info", false);
+        camera_info_topic, false);
 
     // Query QoS to publisher to align the QoS for the topics to be published
     rclcpp::QoS img_qos(1);
@@ -153,7 +176,7 @@ void GpuImgProc::determineQosCallback(bool do_rectify) {
 
     if (do_rectify) {
       rectified_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
-          "image_rect", img_qos);
+          image_rect_topic, img_qos);
       rect_compressed_pub_ = this->create_publisher<sensor_msgs::msg::CompressedImage>(
           "image_rect/compressed", img_qos);
       rectify_task_queue_.emplace(max_task_queue_length_);
@@ -162,7 +185,7 @@ void GpuImgProc::determineQosCallback(bool do_rectify) {
       info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
           info_sub_topic_name, info_qos, std::bind(&GpuImgProc::cameraInfoCallback, this, std::placeholders::_1));
       info_rect_pub_ = this->create_publisher<sensor_msgs::msg::CameraInfo>(
-          "camera_info_rect", info_qos);
+          camera_info_rect_topic, info_qos);
     }
 
     // Once all queries receive sufficient results, stop the timer

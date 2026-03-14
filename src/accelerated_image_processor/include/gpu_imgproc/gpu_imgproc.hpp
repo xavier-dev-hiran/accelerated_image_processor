@@ -60,6 +60,8 @@ private:
     std::optional<std::thread> rectify_worker_;
     std::optional<util::TaskQueue> compress_task_queue_;
     std::optional<std::thread> compress_worker_;
+
+    std::string image_raw_topic, camera_info_topic, image_rect_topic, camera_info_rect_topic;
 };
 
 
